@@ -10,7 +10,7 @@ from causal_conv1d import causal_conv1d_fn
 
 device = torch.device("cuda:0")
 
-class upms(nn.Module):  # 模型开始时对ms进行上采样  64*4*16*16 -> 64*4*64*64
+class upms(nn.Module):
     def __init__(self):
         super(upms, self).__init__()
 
@@ -18,10 +18,10 @@ class upms(nn.Module):  # 模型开始时对ms进行上采样  64*4*16*16 -> 64*
 
         return F.interpolate(x, scale_factor=4, mode='bilinear', align_corners=False)
 
-class R1(nn.Module):  # 模型开始时对Pan变换使其通道数保持与ms一致  64*1*64*64 -> 64*4*64*64
+class R1(nn.Module): 
     def __init__(self):
         super(R1, self).__init__()
-        self.conv = nn.Conv2d(in_channels=1, out_channels=4, kernel_size=1)  # 这里用1*1卷积核 / 用3*3卷积核+padding / 3*3卷积核+步长为2
+        self.conv = nn.Conv2d(in_channels=1, out_channels=4, kernel_size=1) 
 
     def forward(self, x):
 
@@ -59,17 +59,15 @@ class mamba_init:
         else:
             raise NotImplementedError
 
-        # Initialize dt bias so that F.softplus(dt_bias) is between dt_min and dt_max
         dt = torch.exp(
             torch.rand(d_inner) * (math.log(dt_max) - math.log(dt_min))
             + math.log(dt_min)
         ).clamp(min=dt_init_floor)
-        # Inverse of softplus: https://github.com/pytorch/pytorch/issues/72759
+
         inv_dt = dt + torch.log(-torch.expm1(-dt))
         with torch.no_grad():
             dt_proj.bias.copy_(inv_dt)
-        # Our initialization would set all Linear.bias to zero, need to mark this one as _no_reinit
-        # dt_proj.bias._no_reinit = True
+
 
         return dt_proj
 
@@ -343,7 +341,7 @@ class Mamba(nn.Module):  # in:B,16,16,64  out:B,16,16,64
     def __init__(self):
         super(Mamba, self).__init__()
         self.norm = nn.LayerNorm(64)
-        self.mamba = MAMBA(64)  # 对着Vmamba的框架图检查过了，除了：Vmamba应该没有z注意(意味着linear(d_model, d_inner) 而不是d_inner*2) 之外，全都对了
+        self.mamba = MAMBA(64) 
         self.mlp = nn.Sequential(nn.Linear(64, 64 * 4), nn.GELU(), nn.Linear(64 * 4, 64))
 
     def forward(self, x):
@@ -356,7 +354,7 @@ class Cromamba(nn.Module):  # in:B,16,16,64  out:B,16,16,64
     def __init__(self):
         super(Cromamba, self).__init__()
         self.norm = nn.LayerNorm(64)
-        self.cromamba = CROMAMBA(64)  # 对着Vmamba的框架图检查过了，除了：Vmamba应该没有z注意(意味着linear(d_model, d_inner) 而不是d_inner*2) 之外，全都对了
+        self.cromamba = CROMAMBA(64) 
         self.mlp_ms = nn.Sequential(nn.Linear(64, 64 * 4), nn.GELU(), nn.Linear(64 * 4, 64))
         self.mlp_pan = nn.Sequential(nn.Linear(64, 64 * 4), nn.GELU(), nn.Linear(64 * 4, 64))
 
@@ -393,12 +391,7 @@ class Fusion(nn.Module):
 
         outer_product = torch.einsum('bci,bcj->bcij', A, B)  # (b, h*w, c, c)
 
-        # Step 2: 对外积矩阵进行池化
-        pooled_outer_product = torch.mean(outer_product, dim=2)  # (b,h*w,c,c) -> (b,h*w,c)每个外积矩阵平均池化
-
-        # out = pooled_outer_product.permute(0, 2, 1)
-
-        # return out
+        pooled_outer_product = torch.mean(outer_product, dim=2)  # (b,h*w,c,c) -> (b,h*w,c)
         return pooled_outer_product
 
 class Block2(nn.Module):  # in:B,L,D  out:B,L,D
@@ -414,8 +407,8 @@ class Block2(nn.Module):  # in:B,L,D  out:B,L,D
 
         return result
 
-class Net(nn.Module):  # 总参数700w  提取部分630w M (其中Downsample 50w M  Block1 580w M)  融合+分类 70w M
-    def __init__(self,channel_ms,channel_pan, Classes):  # 实例化类时需要传入的参数：Classes
+class Net(nn.Module): 
+    def __init__(self,channel_ms,channel_pan, Classes): 
         super(Net, self).__init__()
 
         self.upms = upms()
@@ -429,13 +422,10 @@ class Net(nn.Module):  # 总参数700w  提取部分630w M (其中Downsample 50w
         self.mamba_ms_1 = Mamba()  # in:B,16,16,64  out:B,16,16,64
         self.mamba_pan_1 = Mamba()
         self.cromamba_1 = Cromamba()
-        self.FusionBlock = Block2()  # 重新写一下，要归一化完了再进去
+        self.FusionBlock = Block2()  
         self.classifier = Classifier(Classes=Classes)
 
-    def forward(self, ms_in, pan_in):  # 调用类时需要传入的参数：ms:64*4*16*16  pan:64*1*64*64
-        """
-        1*64*64/4*16*16 -> 4*64*64 reshape:B,16,16,64(但没扫描),进入第一个Block1,进入mamba_pan,  B,16,16,64->linear->B,16,16,128->B,128,16,16->conv->B,128,16,16->扫描->4,B,256,128->MAMBA->4,B,256,128->merge->B,16,16,128->linear->B,16,16,64->FNN->B,16,16,64的msf,panf,mss,pans.->B,16,16,64的msc,panc->下一个MAMBA
-        """
+    def forward(self, ms_in, pan_in): 
         ms = self.upms(ms_in)  # ms:64*4*16*16 -> 64*4*64*64
         pan = self.R1(pan_in)  # pan:64*1*64*64 -> 64*4*64*64
         b, c, h, w = ms.shape
